@@ -4,86 +4,156 @@ services:
   zoo1:
     image: zookeeper:3.5.9
     hostname: zoo1
+    container_name: zoo1
     ports:
     - 2181:2181
     environment:
       ZOO_MY_ID: 1
-      ZOO_SERVERS: server.1=zoo1:2888:3888;2181 server.2=zoo2:2888:3888;2181 server.3=zoo3:2888:3888;2181
+      ZOO_SERVERS: server.1=zoo1:2888:3888;2181 \
+                   server.2=zoo2:2888:3888;2181 \
+                   server.3=zoo3:2888:3888;2181
+    volumes:
+    - ./config/log:/datalog/version-2/log.0
+    - ./config/snapshot:/data/version-2/snapshot.0
     restart: always
 
   zoo2:
+    depends_on: [ zoo1 ]
     image: zookeeper:3.5.9
     hostname: zoo2
+    container_name: zoo2
     ports:
     - 2182:2181
     environment:
       ZOO_MY_ID: 2
-      ZOO_SERVERS: server.1=zoo1:2888:3888;2181 server.2=zoo2:2888:3888;2181 server.3=zoo3:2888:3888;2181
+      ZOO_SERVERS: server.1=zoo1:2888:3888;2181 \
+                   server.2=zoo2:2888:3888;2181 \
+                   server.3=zoo3:2888:3888;2181
     restart: always
 
   zoo3:
+    depends_on: [ zoo1 ]
     image: zookeeper:3.5.9
     hostname: zoo3
+    container_name: zoo3
     ports:
     - 2183:2181
     environment:
       ZOO_MY_ID: 3
-      ZOO_SERVERS: server.1=zoo1:2888:3888;2181 server.2=zoo2:2888:3888;2181 server.3=zoo3:2888:3888;2181
+      ZOO_SERVERS: server.1=zoo1:2888:3888;2181 \
+                   server.2=zoo2:2888:3888;2181 \
+                   server.3=zoo3:2888:3888;2181
     restart: always
 
-  register:
-    depends_on:
-    - zoo1
-    - zoo2
-    - zoo3
-    image: jam2in/zkcli:3.5.9
-    environment:
-      ZK_ENSEMBLE: zoo1:2181,zoo2:2181,zoo3:2181
-      SERVICE_CODE: test
-      CACHENODES: cache1:11211,cache2:11212,cache3:11213
-    restart: on-failure
-
-  cache1:
-    depends_on:
-      register:
-        condition: service_completed_successfully
+  master1:
+    depends_on: [ zoo1, zoo2, zoo3 ]
     build:
-      context: /Users/jam2in/Documents/GitHub/arcus-memcached-EE
-      dockerfile: Dockerfile
+      context: ./arcus-memcached-EE
+      dockerfile: Dockerfile.EE
     command: -m 100 -p 11211 -z zoo1:2181,zoo2:2181,zoo3:2181
-    hostname: cache1
-    ports:
-    - 11211:11211
+    ports: [ 11211:11211 ]
+    hostname: master1
+    container_name: master1
+    healthcheck:
+      test: ["CMD-SHELL",
+             "if [ -f /tmp/ready ]; then exit 0;
+              elif [ \"$(echo \"cluster join begin\" | nc localhost 11211)\" = \"OK\r\" ]; then
+              touch /tmp/ready && exit 0; fi; exit 1;"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
     environment:
       ARCUS_CACHE_PUBLIC_IP: 127.0.0.1
     restart: always
 
-  cache2:
+  master2:
     depends_on:
-      register:
-        condition: service_completed_successfully
+      master1:
+        condition: service_healthy
     build:
-      context: /Users/jam2in/Documents/GitHub/arcus-memcached-EE
-      dockerfile: Dockerfile
+      context: ./arcus-memcached-EE
+      dockerfile: Dockerfile.EE
     command: -m 100 -p 11212 -z zoo1:2181,zoo2:2181,zoo3:2181
-    hostname: cache2
-    ports:
-    - 11212:11212
+    ports: [ 11212:11212 ]
+    hostname: master2
+    container_name: master2
+    healthcheck:
+      test: ["CMD-SHELL",
+             "if [ -f /tmp/ready ]; then exit 0;
+              elif [ \"$(echo \"cluster join\" | nc localhost 11212)\" = \"OK\r\" ]; then
+              touch /tmp/ready && exit 0; fi; exit 1;"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
     environment:
       ARCUS_CACHE_PUBLIC_IP: 127.0.0.1
     restart: always
 
-  cache3:
+  master3:
     depends_on:
-      register:
-        condition: service_completed_successfully
+      master2:
+        condition: service_healthy
     build:
-      context: /Users/jam2in/Documents/GitHub/arcus-memcached-EE
-      dockerfile: Dockerfile
+      context: ./arcus-memcached-EE
+      dockerfile: Dockerfile.EE
     command: -m 100 -p 11213 -z zoo1:2181,zoo2:2181,zoo3:2181
-    hostname: cache3
-    ports:
-    - 11213:11213
+    ports: [ 11213:11213 ]
+    hostname: master3
+    container_name: master3
+    healthcheck:
+      test: ["CMD-SHELL",
+             "if [ -f /tmp/ready ]; then exit 0;
+              elif [ \"$(echo \"cluster join end\" | nc localhost 11213)\" = \"OK\r\" ]; then
+              touch /tmp/ready && exit 0; fi"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    environment:
+      ARCUS_CACHE_PUBLIC_IP: 127.0.0.1
+    restart: always
+
+  slave1:
+    depends_on:
+      master1:
+        condition: service_healthy
+    build:
+      context: ./arcus-memcached-EE
+      dockerfile: Dockerfile.EE
+    command: -m 100 -p 11221 -z zoo1:2181,zoo2:2181,zoo3:2181
+    ports: [ 11221:11221 ]
+    hostname: slave1
+    container_name: slave1
+    environment:
+      ARCUS_CACHE_PUBLIC_IP: 127.0.0.1
+    restart: always
+
+  slave2:
+    depends_on:
+      master2:
+        condition: service_healthy
+    build:
+      context: ./arcus-memcached-EE
+      dockerfile: Dockerfile.EE
+    command: -m 100 -p 11222 -z zoo1:2181,zoo2:2181,zoo3:2181
+    ports: [ 11222:11222 ]
+    hostname: slave2
+    container_name: slave2
+    environment:
+      ARCUS_CACHE_PUBLIC_IP: 127.0.0.1
+    restart: always
+
+  slave3:
+    depends_on:
+      master3:
+        condition: service_healthy
+    build:
+      context: ./arcus-memcached-EE
+      dockerfile: Dockerfile.EE
+    command: -m 100 -p 11223 -z zoo1:2181,zoo2:2181,zoo3:2181
+    ports: [ 11223:11223 ]
+    hostname: slave3
+    container_name: slave3
     environment:
       ARCUS_CACHE_PUBLIC_IP: 127.0.0.1
     restart: always

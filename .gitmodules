@@ -1,0 +1,4 @@
+[submodule "arcus-memcached-EE"]
+	path = arcus-memcached-EE
+	url = https://github.com/jam2in/arcus-memcached-EE
+	branch = memc_repl_dev
